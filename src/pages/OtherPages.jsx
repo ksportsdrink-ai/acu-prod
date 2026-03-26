@@ -366,3 +366,123 @@ function EditProfileModal({ profile, onSave, onClose }) {
     </Modal>
   )
 }
+
+/* ── 주치의(레지던트) 관리 ──────────────────────────── */
+import { getResidents, upsertResident, deleteResident } from '../services/tasks.js'
+import { DEPTS } from '../utils/index.js'
+import { Bell, Trash2 as Trash } from 'lucide-react'
+
+export function ResidentsPage() {
+  const [residents, setResidents] = useState([])
+  const [editDept, setEditDept]   = useState('')
+  const [editName, setEditName]   = useState('')
+  const [saving, setSaving]       = useState(false)
+  const { profile } = useAuth()
+
+  useEffect(()=>{ load() },[])
+  async function load() {
+    const data = await getResidents().catch(()=>[])
+    setResidents(data)
+  }
+
+  async function save() {
+    if(!editDept||!editName.trim()){toast('과와 이름을 입력하세요','error');return}
+    setSaving(true)
+    try {
+      await upsertResident(editDept, editName.trim(), profile)
+      toast(`${editDept} 주치의 등록 완료`,'success')
+      setEditDept(''); setEditName('')
+      load()
+    } catch(e) { toast('저장 실패: '+e.message,'error') }
+    finally { setSaving(false) }
+  }
+
+  async function del(dept) {
+    if(!confirm(`${dept} 주치의를 삭제하시겠습니까?`)) return
+    await deleteResident(dept).catch(()=>{})
+    toast('삭제됨','warning')
+    load()
+  }
+
+  const residentMap = {}
+  residents.forEach(r=>{ residentMap[r.department]=r.name })
+
+  return (
+    <div className="flex-1 overflow-auto">
+      <div className="px-4 py-3 border-b" style={{background:'var(--bg1)',borderColor:'var(--border)'}}>
+        <h1 className="font-bold text-base flex items-center gap-2" style={{color:'var(--text1)'}}>
+          <Bell size={16} style={{color:'var(--amber)'}}/>주치의 관리
+        </h1>
+        <p className="text-xs" style={{color:'var(--text3)'}}>
+          5분 이상 발침 지연 시 해당 과 주치의에게 브라우저 알림이 발송됩니다
+        </p>
+      </div>
+
+      <div className="p-4 max-w-lg space-y-5">
+        {/* 등록 폼 */}
+        <div className="card p-4 space-y-3" style={{background:'var(--bg1)'}}>
+          <h3 className="font-bold text-sm" style={{color:'var(--text1)'}}>주치의 등록 / 수정</h3>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="lbl">진료과</label>
+              <select className="inp" value={editDept} onChange={e=>setEditDept(e.target.value)}>
+                <option value="">과 선택</option>
+                {DEPTS.map(d=><option key={d} value={d}>{d}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="lbl">주치의 이름</label>
+              <input className="inp" value={editName} onChange={e=>setEditName(e.target.value)}
+                     placeholder="예: 김레지던트" onKeyDown={e=>e.key==='Enter'&&save()}/>
+            </div>
+          </div>
+          <button onClick={save} disabled={saving} className="btn btn-teal w-full py-3">
+            {saving?'저장 중...':'등록 / 수정'}
+          </button>
+        </div>
+
+        {/* 현재 주치의 목록 */}
+        <div className="card p-4" style={{background:'var(--bg1)'}}>
+          <h3 className="font-bold text-sm mb-3" style={{color:'var(--text1)'}}>등록된 주치의</h3>
+          {DEPTS.map(d=>{
+            const name = residentMap[d]
+            return (
+              <div key={d} className="flex items-center justify-between py-2.5 border-b last:border-0"
+                   style={{borderColor:'var(--border)'}}>
+                <div className="flex items-center gap-3">
+                  <span className="w-12 text-xs font-bold px-2 py-1 rounded-lg text-center"
+                        style={{background:'rgba(251,191,36,.1)',color:'var(--amber)'}}>{d}</span>
+                  {name
+                    ? <span className="text-sm font-semibold" style={{color:'var(--text1)'}}>{name}</span>
+                    : <span className="text-sm" style={{color:'var(--text3)'}}>미등록</span>
+                  }
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={()=>{setEditDept(d);setEditName(name||'')}}
+                          className="btn btn-ghost px-3 py-1.5 text-xs">
+                    {name?'수정':'등록'}
+                  </button>
+                  {name && (
+                    <button onClick={()=>del(d)}
+                            className="p-2 rounded-xl transition-all"
+                            style={{color:'var(--red)'}}
+                            onMouseEnter={e=>e.currentTarget.style.background='rgba(255,87,87,.1)'}
+                            onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                      <Trash size={14}/>
+                    </button>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+
+        <div className="text-xs rounded-2xl p-3"
+             style={{background:'rgba(251,191,36,.06)',color:'var(--amber)',border:'1px solid rgba(251,191,36,.2)'}}>
+          💡 알림은 해당 주치의가 시스템에 로그인된 브라우저에서 수신됩니다.
+          실제 SMS/카카오 알림은 추후 연동 예정입니다.
+        </div>
+      </div>
+    </div>
+  )
+}

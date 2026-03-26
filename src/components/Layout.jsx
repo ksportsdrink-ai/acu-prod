@@ -30,6 +30,7 @@ export default function Layout() {
     { to: '/analytics', icon: BarChart3,       label: '통계' },
     { to: '/export',    icon: Download,        label: '내보내기',    perm: 'export' },
     { to: '/users',     icon: Users,           label: '사용자 관리', perm: 'manageUsers' },
+    { to: '/residents', icon: Bell,            label: '주치의 관리', perm: 'manageUsers' },
   ].filter(n => !n.perm || can(profile, n.perm))
 
   async function doLogout() { await logout(); nav('/login') }

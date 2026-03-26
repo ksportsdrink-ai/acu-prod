@@ -12,11 +12,10 @@ export async function fetchTasks(dateStr = todayKST()) {
   return data || []
 }
 
-/* ── 날짜 목록 (히스토리용) ──────────────────────────── */
+/* ── 날짜 목록 ───────────────────────────────────────── */
 export async function fetchAvailableDates() {
   const { data, error } = await supabase
-    .from('tasks')
-    .select('task_date')
+    .from('tasks').select('task_date')
     .order('task_date', { ascending: false })
   if (error) return [todayKST()]
   return [...new Set((data || []).map(r => r.task_date))]
@@ -35,13 +34,11 @@ export async function createTask(payload, profile) {
     memo:               payload.memo || '',
     status:             'scheduled',
     created_by:         profile.id,
-    created_by_name:    payload.doctor || profile.name,
+    created_by_name:    profile.name,
   }
   const { data, error } = await supabase
     .from('tasks').insert(row).select().single()
   if (error) throw error
-
-  // 감사 로그
   await logAudit({ taskId: data.id, action: '태스크생성', actorId: profile.id, actorName: profile.name, newStatus: 'scheduled' })
   return data
 }
@@ -55,10 +52,18 @@ export async function updateTaskStatus(taskId, newStatus, profile, extra = {}) {
     patch.in_progress_by      = profile.id
     patch.in_progress_by_name = profile.name
     patch.in_progress_at      = now
+    patch.paused_by           = null  // 재시작 시 일시정지 해제
+    patch.paused_at           = null
+  }
+  if (newStatus === 'paused') {
+    // 중단 - 진행자 기록 유지, paused 정보 추가
+    patch.paused_by   = profile.id
+    patch.paused_by_name = profile.name
+    patch.paused_at   = now
+    patch.pause_reason = extra.pauseReason || ''
   }
   if (newStatus === 'delayed') {
     patch.delay_reason = extra.delayReason || ''
-    // 진행 중 담당자가 없으면 지연 처리자로 기록
     if (!extra.alreadyInProgress) {
       patch.in_progress_by      = profile.id
       patch.in_progress_by_name = profile.name
@@ -71,7 +76,6 @@ export async function updateTaskStatus(taskId, newStatus, profile, extra = {}) {
     patch.completed_at      = now
   }
 
-  // 현재 상태 조회 (audit log용)
   const { data: current } = await supabase
     .from('tasks').select('status').eq('id', taskId).single()
 
@@ -79,15 +83,11 @@ export async function updateTaskStatus(taskId, newStatus, profile, extra = {}) {
     .from('tasks').update(patch).eq('id', taskId).select().single()
   if (error) throw error
 
-  // 감사 로그
   await logAudit({
-    taskId,
-    action: `상태변경`,
-    actorId: profile.id,
-    actorName: profile.name,
-    oldStatus: current?.status,
-    newStatus,
-    note: extra.delayReason || '',
+    taskId, action: `상태변경`,
+    actorId: profile.id, actorName: profile.name,
+    oldStatus: current?.status, newStatus,
+    note: extra.delayReason || extra.pauseReason || '',
   })
   return data
 }
@@ -99,25 +99,21 @@ export async function deleteTask(taskId, profile) {
   await logAudit({ taskId, action: '태스크삭제', actorId: profile.id, actorName: profile.name })
 }
 
-/* ── 감사 로그 기록 ──────────────────────────────────── */
+/* ── 감사 로그 ───────────────────────────────────────── */
 async function logAudit({ taskId, action, actorId, actorName, oldStatus, newStatus, note }) {
   await supabase.from('audit_logs').insert({
-    task_id:    taskId,
-    action,
-    actor_id:   actorId,
-    actor_name: actorName,
-    old_status: oldStatus || null,
-    new_status: newStatus || null,
-    note:       note || null,
+    task_id: taskId, action,
+    actor_id: actorId, actor_name: actorName,
+    old_status: oldStatus || null, new_status: newStatus || null,
+    note: note || null,
   })
 }
 
-/* ── Realtime 구독 (오늘 태스크) ─────────────────────── */
+/* ── Realtime 구독 ───────────────────────────────────── */
 export function subscribeToTasks(dateStr, onUpdate) {
   const channel = supabase
     .channel(`tasks_${dateStr}`)
-    .on(
-      'postgres_changes',
+    .on('postgres_changes',
       { event: '*', schema: 'public', table: 'tasks', filter: `task_date=eq.${dateStr}` },
       () => onUpdate()
     )
@@ -125,17 +121,37 @@ export function subscribeToTasks(dateStr, onUpdate) {
   return () => supabase.removeChannel(channel)
 }
 
-/* ── 일별 통계 계산 ──────────────────────────────────── */
+/* ── 주치의(레지던트) ────────────────────────────────── */
+export async function getResidents() {
+  const { data } = await supabase.from('residents').select('*').order('department')
+  return data || []
+}
+export async function upsertResident(dept, name, profile) {
+  const { data, error } = await supabase
+    .from('residents')
+    .upsert({ department: dept, name, updated_by: profile.name }, { onConflict: 'department' })
+    .select().single()
+  if (error) throw error
+  return data
+}
+export async function deleteResident(dept) {
+  await supabase.from('residents').delete().eq('department', dept)
+}
+
+/* ── 통계 ────────────────────────────────────────────── */
 export function calcStats(tasks) {
-  const stats = { total: 0, scheduled: 0, in_progress: 0, delayed: 0, completed: 0, needles: 0 }
-  const byFloor  = {}
-  const byDoctor = {}
+  const stats = { total:0, scheduled:0, in_progress:0, paused:0, delayed:0, completed:0, needles:0 }
+  const byFloor = {}, byDoctor = {}, byDept = {}
   tasks.forEach(t => {
     stats.total++
-    stats[t.status] = (stats[t.status] || 0) + 1
-    stats.needles += t.needle_count || 0
-    byFloor[t.floor]           = (byFloor[t.floor] || 0) + 1
-    byDoctor[t.created_by_name] = (byDoctor[t.created_by_name] || 0) + 1
+    stats[t.status] = (stats[t.status]||0)+1
+    stats.needles += t.needle_count||0
+    byFloor[t.floor]             = (byFloor[t.floor]||0)+1
+    byDoctor[t.created_by_name]  = (byDoctor[t.created_by_name]||0)+1
+    byDept[t.department]         = (byDept[t.department]||0)+1
   })
-  return { ...stats, byFloor, byDoctor }
+  return { ...stats, byFloor, byDoctor, byDept }
 }
+
+/* ── CSV ─────────────────────────────────────────────── */
+export { fetchAvailableDates as fetchDates }

@@ -1,16 +1,22 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ArrowLeft, Zap, Plus } from 'lucide-react'
 import { createTask } from '../services/tasks.js'
 import { useTasks } from '../context/TaskContext.jsx'
 import { useAuth } from '../context/AuthContext.jsx'
-import { DEPARTMENTS } from '../services/auth.js'
 import { parseQuickInput, anonymize, detectFloor, validRoom, fmtTime, pad } from '../utils/index.js'
 import { FloorBadge, toast } from '../components/ui.jsx'
 
-// 로컬 저장 키
-const LS_DEPT   = 'acu_lastDept'
-const LS_DOCTOR = 'acu_lastDoctor'
+// ── 진료과 목록 ──────────────────────────────────────────
+const DEPTS = ['L','I','M2','N','G','P','F','OED','NP','AM1','AM2','AM3','PT1','PT2','GY','PED']
+
+// 기본 과 localStorage 저장/불러오기
+function getDefaultDept() {
+  return localStorage.getItem('acu_default_dept') || 'N'
+}
+function setDefaultDept(dept) {
+  localStorage.setItem('acu_default_dept', dept)
+}
 
 export default function NewOrderPage() {
   const { profile } = useAuth()
@@ -18,38 +24,23 @@ export default function NewOrderPage() {
   const nav = useNavigate()
   const [mode, setMode] = useState('fast')
 
-  // 마지막 사용 과/이름 복원
-  const [savedDept,   setSavedDept]   = useState(() => localStorage.getItem(LS_DEPT)   || DEPARTMENTS[0])
-  const [savedDoctor, setSavedDoctor] = useState(() => localStorage.getItem(LS_DOCTOR) || (profile?.name || ''))
-
   // fast input
-  const [raw,      setRaw]      = useState('')
-  const [preview,  setPreview]  = useState(null)
-  const [fastErr,  setFastErr]  = useState('')
+  const [raw, setRaw]         = useState('')
+  const [preview, setPreview] = useState(null)
+  const [fastErr, setFastErr] = useState('')
   const [baseHour, setBaseHour] = useState(new Date().getHours())
-  const [fastDept, setFastDept] = useState(savedDept)
-  const [fastDoctor, setFastDoctor] = useState(savedDoctor)
+  const [fastDept, setFastDept] = useState(getDefaultDept())
 
   // manual form
   const now = new Date()
   const [form, setForm] = useState({
     h: pad(now.getHours()), m: pad(now.getMinutes()),
     room: '', name: '', count: '',
-    dept: savedDept, doctor: savedDoctor, memo: '',
+    dept: getDefaultDept(), memo: '',
   })
-  const [errors,     setErrors]     = useState({})
+  const [errors, setErrors] = useState({})
   const [submitting, setSubmitting] = useState(false)
-  const [done,       setDone]       = useState(null)
-
-  // 과/이름 변경 시 localStorage 저장
-  function changeDept(v) {
-    setFastDept(v); setForm(f=>({...f,dept:v}))
-    setSavedDept(v); localStorage.setItem(LS_DEPT, v)
-  }
-  function changeDoctor(v) {
-    setFastDoctor(v); setForm(f=>({...f,doctor:v}))
-    setSavedDoctor(v); localStorage.setItem(LS_DOCTOR, v)
-  }
+  const [done, setDone] = useState(null)
 
   function handleFast(val) {
     setRaw(val); setFastErr('')
@@ -62,7 +53,6 @@ export default function NewOrderPage() {
 
   async function submitFast() {
     if (!preview) return
-    if (!fastDoctor.trim()) { setFastErr('등록의 이름을 입력하세요'); return }
     setSubmitting(true)
     try {
       await createTask({
@@ -71,28 +61,26 @@ export default function NewOrderPage() {
         patientAnonymized: preview.patientAnonymized,
         needleCount: preview.needleCount,
         department: fastDept,
-        doctor: fastDoctor.trim(),
       }, profile)
       refresh()
-      toast(`✅ 등록: ${preview.patientAnonymized} (${preview.room}호)`, 'success')
-      setDone({ ...preview, dept: fastDept, doctor: fastDoctor })
+      toast(`✅ 등록: ${preview.patientAnonymized} (${preview.room}호) [${fastDept}]`, 'success')
+      setDone({ ...preview, dept: fastDept })
       setRaw(''); setPreview(null)
     } catch (e) { toast('등록 실패: ' + e.message, 'error') }
     finally { setSubmitting(false) }
   }
 
   function setF(k, v) {
-    setForm(f => ({...f,[k]:v}))
-    if (errors[k]) setErrors(e => {const n={...e};delete n[k];return n})
+    setForm(f => ({ ...f, [k]: v }))
+    if (errors[k]) setErrors(e => { const n={...e}; delete n[k]; return n })
   }
 
   function validateManual() {
     const e = {}
     if (!form.room) e.room = '호실 입력'
     else if (!validRoom(form.room)) e.room = '유효 범위: 501~517 / 601~618 / 701~717'
-    if (!form.name)  e.name  = '환자명 입력'
-    if (!form.count || parseInt(form.count)<1) e.count = '침 갯수 입력'
-    if (!form.doctor.trim()) e.doctor = '등록의 이름 입력'
+    if (!form.name) e.name = '환자명 입력'
+    if (!form.count || parseInt(form.count) < 1) e.count = '침 갯수 입력'
     setErrors(e); return !Object.keys(e).length
   }
 
@@ -108,17 +96,12 @@ export default function NewOrderPage() {
         floor: detectFloor(form.room) || '기타',
         patientAnonymized: anonymize(form.name),
         needleCount: parseInt(form.count),
-        department: form.dept,
-        doctor: form.doctor.trim(),
-        memo: form.memo,
+        department: form.dept, memo: form.memo,
       }
-      // 과/이름 저장
-      localStorage.setItem(LS_DEPT,   form.dept)
-      localStorage.setItem(LS_DOCTOR, form.doctor.trim())
       await createTask(payload, profile)
       refresh()
-      toast(`✅ 등록: ${payload.patientAnonymized} (${form.room}호)`, 'success')
-      setDone({ preview: { time:`${form.h}:${form.m}`, floor:payload.floor, patient:payload.patientAnonymized, count:payload.needleCount }, ...payload })
+      toast(`✅ 등록: ${payload.patientAnonymized} (${form.room}호) [${form.dept}]`, 'success')
+      setDone({ preview: { time:`${form.h}:${form.m}`, floor:payload.floor, patient:payload.patientAnonymized, count:payload.needleCount }, room:form.room, dept:form.dept })
     } catch (e) { toast('등록 실패: ' + e.message, 'error') }
     finally { setSubmitting(false) }
   }
@@ -132,13 +115,12 @@ export default function NewOrderPage() {
       <h2 className="text-xl font-bold" style={{color:'var(--green)'}}>등록 완료</h2>
       <div className="card p-4 w-full max-w-sm space-y-2.5 text-sm" style={{background:'var(--bg1)'}}>
         {[
-          ['시간',  <span className="font-mono font-bold" style={{color:'var(--teal)'}}>{pv?.time || fmtTime(done.scheduledAt)}</span>],
-          ['호실',  <span className="font-bold">{done.room}호 <FloorBadge floor={pv?.floor || done.floor}/></span>],
-          ['환자',  <span className="font-bold">{pv?.patient || done.patientAnonymized}</span>],
-          ['침수',  <span className="font-mono font-bold" style={{color:'var(--teal)'}}>{pv?.count || done.needleCount}개</span>],
-          ['과',    <span>{done.dept || done.department}</span>],
-          ['등록의',<span>{done.doctor || done.created_by_name}</span>],
-        ].map(([l,v])=>(
+          ['시간',  <span className="font-mono font-bold" style={{color:'var(--teal)'}}>{pv?.time}</span>],
+          ['호실',  <span className="font-bold">{done.room}호 <FloorBadge floor={pv?.floor}/></span>],
+          ['환자',  <span className="font-bold">{pv?.patient}</span>],
+          ['침수',  <span className="font-mono font-bold" style={{color:'var(--teal)'}}>{pv?.count}개</span>],
+          ['진료과',<span className="font-bold" style={{color:'var(--amber)'}}>{done.dept}</span>],
+        ].map(([l,v]) => (
           <div key={l} className="flex justify-between items-center">
             <span style={{color:'var(--text3)'}}>{l}</span>{v}
           </div>
@@ -177,34 +159,10 @@ export default function NewOrderPage() {
           ))}
         </div>
 
-        {/* ── 공통: 과 + 등록의 ── */}
-        <div className="card p-4 mb-4 space-y-3" style={{background:'var(--bg1)'}}>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="lbl">🏥 진료과</label>
-              <select className="inp" value={mode==='fast'?fastDept:form.dept}
-                      onChange={e=>changeDept(e.target.value)}>
-                {DEPARTMENTS.map(d=><option key={d} value={d}>{d}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="lbl">👨‍⚕️ 등록의 이름</label>
-              <input className="inp" value={mode==='fast'?fastDoctor:form.doctor}
-                     onChange={e=>changeDoctor(e.target.value)}
-                     placeholder="예: 허준영" />
-              {errors.doctor && <p className="text-xs mt-1" style={{color:'var(--red)'}}>{errors.doctor}</p>}
-            </div>
-          </div>
-          <p className="text-xs" style={{color:'var(--text3)'}}>
-            💾 마지막 설정이 자동 저장됩니다
-          </p>
-        </div>
-
         {/* ── FAST INPUT ── */}
         {mode==='fast' && (
           <div className="space-y-4">
-            <div className="rounded-2xl p-4"
-                 style={{background:'rgba(0,212,170,.06)',border:'1px solid rgba(0,212,170,.18)'}}>
+            <div className="rounded-2xl p-4" style={{background:'rgba(0,212,170,.06)',border:'1px solid rgba(0,212,170,.18)'}}>
               <div className="flex items-center gap-2 mb-2">
                 <Zap size={14} color="var(--teal)"/>
                 <span className="text-xs font-bold" style={{color:'var(--teal)'}}>빠른 입력 형식</span>
@@ -221,13 +179,22 @@ export default function NewOrderPage() {
               </div>
             </div>
 
-            <div>
-              <label className="lbl">기준 시</label>
-              <select className="inp" value={baseHour} onChange={e=>setBaseHour(parseInt(e.target.value))}>
-                {Array.from({length:24},(_,h)=>(
-                  <option key={h} value={h}>{pad(h)}시</option>
-                ))}
-              </select>
+            {/* 기준 시 + 진료과 */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="lbl">기준 시</label>
+                <select className="inp" value={baseHour} onChange={e=>setBaseHour(parseInt(e.target.value))}>
+                  {Array.from({length:24},(_,h)=>(
+                    <option key={h} value={h}>{pad(h)}시</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="lbl">진료과</label>
+                <select className="inp" value={fastDept} onChange={e=>{setFastDept(e.target.value);setDefaultDept(e.target.value)}}>
+                  {DEPTS.map(d=><option key={d} value={d}>{d}</option>)}
+                </select>
+              </div>
             </div>
 
             <div>
@@ -263,11 +230,20 @@ export default function NewOrderPage() {
                   <div><span style={{color:'var(--text3)'}}>침수 </span>
                     <span className="font-mono font-bold" style={{color:'var(--teal)'}}>{preview.needleCount}개</span>
                   </div>
-                  <div><span style={{color:'var(--text3)'}}>과 </span><span>{fastDept}</span></div>
-                  <div><span style={{color:'var(--text3)'}}>등록의 </span><span>{fastDoctor}</span></div>
+                  <div><span style={{color:'var(--text3)'}}>진료과 </span>
+                    <span className="font-bold" style={{color:'var(--amber)'}}>{fastDept}</span>
+                  </div>
+                  <div><span style={{color:'var(--text3)'}}>등록자 </span>
+                    <span>{profile.name}</span>
+                  </div>
                 </div>
               </div>
             )}
+
+            {/* 기본 과 저장 안내 */}
+            <p className="text-xs" style={{color:'var(--text3)'}}>
+              💡 진료과 선택 시 다음 등록에도 자동 적용됩니다
+            </p>
 
             <button onClick={submitFast} disabled={!preview||submitting}
                     className="btn btn-teal w-full py-4 text-lg">
@@ -283,12 +259,10 @@ export default function NewOrderPage() {
               <label className="lbl">⏰ 예약 시간</label>
               <div className="flex items-center gap-3">
                 <input type="number" min={0} max={23} className="inp text-center font-mono font-bold"
-                       style={{fontSize:22}} value={form.h}
-                       onChange={e=>setF('h',pad(e.target.value))}/>
+                       style={{fontSize:22}} value={form.h} onChange={e=>setF('h',pad(e.target.value))}/>
                 <span className="text-2xl font-bold" style={{color:'var(--text3)'}}>:</span>
                 <input type="number" min={0} max={59} className="inp text-center font-mono font-bold"
-                       style={{fontSize:22}} value={form.m}
-                       onChange={e=>setF('m',pad(e.target.value))}/>
+                       style={{fontSize:22}} value={form.m} onChange={e=>setF('m',pad(e.target.value))}/>
               </div>
               <div className="flex gap-2 mt-2">
                 {[10,20,30,60].map(min=>(
@@ -333,6 +307,22 @@ export default function NewOrderPage() {
                 </p>
               )}
               {errors.name && <p className="text-xs mt-1" style={{color:'var(--red)'}}>{errors.name}</p>}
+            </div>
+
+            <div>
+              <label className="lbl">🏷 진료과</label>
+              <div className="flex flex-wrap gap-2">
+                {DEPTS.map(d=>(
+                  <button key={d} type="button"
+                    onClick={()=>{setF('dept',d);setDefaultDept(d)}}
+                    className="px-3 py-2 rounded-xl text-sm font-bold transition-all"
+                    style={form.dept===d
+                      ?{background:'rgba(251,191,36,.2)',color:'var(--amber)',border:'1px solid rgba(251,191,36,.4)'}
+                      :{background:'var(--bg2)',color:'var(--text2)',border:'1px solid var(--border)'}}>
+                    {d}
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div>
