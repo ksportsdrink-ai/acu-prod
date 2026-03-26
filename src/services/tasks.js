@@ -35,7 +35,7 @@ export async function createTask(payload, profile) {
     memo:               payload.memo || '',
     status:             'scheduled',
     created_by:         profile.id,
-    created_by_name:    profile.name,
+    created_by_name:    payload.doctor || profile.name,
   }
   const { data, error } = await supabase
     .from('tasks').insert(row).select().single()
