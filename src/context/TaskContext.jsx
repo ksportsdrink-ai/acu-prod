@@ -10,35 +10,39 @@ export function TaskProvider({ children }) {
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState(null)
   const unsubRef = useRef(null)
+  const mountedRef = useRef(true)
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
 
   const load = useCallback(async (date) => {
     try {
       setLoading(true)
       const data = await fetchTasks(date)
-      setTasks(data)
-      setError(null)
+      if (mountedRef.current) {
+        setTasks(data)
+        setError(null)
+      }
     } catch (e) {
-      setError(e.message)
+      if (mountedRef.current) setError(e.message)
     } finally {
-      setLoading(false)
+      if (mountedRef.current) setLoading(false)
     }
   }, [])
 
   useEffect(() => {
     load(dateStr)
-
-    // 이전 구독 해제
     if (unsubRef.current) unsubRef.current()
-
-    // Realtime 구독 (오늘만)
     if (dateStr === todayKST()) {
-      unsubRef.current = subscribeToTasks(dateStr, () => load(dateStr))
+      unsubRef.current = subscribeToTasks(dateStr, () => {
+        if (mountedRef.current) load(dateStr)
+      })
     }
-
     return () => { if (unsubRef.current) unsubRef.current() }
   }, [dateStr, load])
 
-  // 낙관적 업데이트 (UI 즉시 반영)
   function optimistic(taskId, patch) {
     setTasks(prev => prev.map(t => t.id === taskId ? { ...t, ...patch } : t))
   }
@@ -49,7 +53,7 @@ export function TaskProvider({ children }) {
   }
 
   const refresh = () => load(dateStr)
-  const stats   = calcStats(tasks)
+  const stats = calcStats(tasks)
 
   return (
     <TaskCtx.Provider value={{
